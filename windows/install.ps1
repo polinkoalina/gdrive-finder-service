@@ -35,6 +35,7 @@ if (-not (Test-Path $INSTALL_DIR)) {
 
 Copy-Item (Join-Path $SCRIPT_DIR "gdrive-copy-link.ps1") $INSTALL_DIR -Force
 Copy-Item (Join-Path $SCRIPT_DIR "gdrive-daemon.ps1") $INSTALL_DIR -Force
+Copy-Item (Join-Path $SCRIPT_DIR "gdrive-handler.ps1") $INSTALL_DIR -Force
 Copy-Item (Join-Path $SCRIPT_DIR "uninstall.ps1") $INSTALL_DIR -Force
 
 Write-Host "  Scripts copied to: $INSTALL_DIR" -ForegroundColor Green
@@ -57,10 +58,9 @@ Set-ItemProperty -Path $urlSchemeKey -Name "URL Protocol" -Value ""
 $commandKey = "$urlSchemeKey\shell\open\command"
 New-Item -Path $commandKey -Force | Out-Null
 
-# When a gdrive:// URL is clicked, pass it to the daemon via clipboard
-# (The daemon monitors clipboard, so we just set the clipboard)
-$daemonScript = Join-Path $INSTALL_DIR "gdrive-daemon.ps1"
-$commandValue = "powershell.exe -ExecutionPolicy Bypass -NoProfile -Command `"Set-Clipboard -Value '%1'; Start-Sleep -Milliseconds 100`""
+# When a gdrive:// URL is clicked, pass it to the handler script (avoids -Command injection)
+$handlerScript = Join-Path $INSTALL_DIR "gdrive-handler.ps1"
+$commandValue = "powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$handlerScript`" `"%1`""
 Set-ItemProperty -Path $commandKey -Name "(Default)" -Value $commandValue
 
 Write-Host "  URL scheme registered: gdrive://" -ForegroundColor Green

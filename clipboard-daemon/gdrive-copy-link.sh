@@ -11,9 +11,24 @@ for f in "$@"; do
         continue
     fi
 
-    # Create gdrive:// URL
+    # Create gdrive:// URL with selective encoding
+    # Encodes @#?&% and spaces, keeps Cyrillic readable
     RELATIVE_PATH="${f#*/Library/}"
-    ENCODED="${RELATIVE_PATH//@/%40}"
+    ENCODED=$(printf '%s' "$RELATIVE_PATH" | python3 -c "
+import sys, urllib.parse
+text = sys.stdin.read().strip()
+result = []
+for ch in text:
+    if ch == '/':
+        result.append(ch)
+    elif ord(ch) > 127:
+        result.append(ch)  # Cyrillic etc — keep readable
+    elif ch.isalnum() or ch in '-_.~':
+        result.append(ch)
+    else:
+        result.append(urllib.parse.quote(ch))
+print(''.join(result), end='')
+")
     GDRIVE_URL="gdrive://$ENCODED"
 
     # Get filename
@@ -62,6 +77,8 @@ $GDRIVE_URL
     # Copy to clipboard
     printf '%s' "$WRAPPED" | pbcopy
 
-    # Notify
-    osascript -e "display notification \"Link copied with Google URL\" with title \"$FILENAME\""
+    # Notify (escape to prevent AppleScript injection)
+    SAFE_FILENAME="${FILENAME//\\/\\\\}"
+    SAFE_FILENAME="${SAFE_FILENAME//\"/\\\"}"
+    osascript -e "display notification \"Link copied with Google URL\" with title \"$SAFE_FILENAME\""
 done

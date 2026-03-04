@@ -33,7 +33,9 @@ function Invoke-LogRotation {
     }
 }
 
-# --- Toast notification ---
+# --- Toast notification (singleton to prevent memory leak) ---
+
+$script:NotifyIcon = $null
 
 function Show-Notification {
     param(
@@ -41,27 +43,30 @@ function Show-Notification {
         [string]$Message
     )
     try {
-        $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
-        $notifyIcon.Icon = [System.Drawing.SystemIcons]::Information
-        $notifyIcon.BalloonTipTitle = $Title
-        $notifyIcon.BalloonTipText = $Message
-        $notifyIcon.Visible = $true
-        $notifyIcon.ShowBalloonTip(3000)
-        # Dispose after brief delay (fire and forget via timer)
-        $timer = New-Object System.Timers.Timer
-        $timer.Interval = 4000
-        $timer.AutoReset = $false
-        Register-ObjectEvent -InputObject $timer -EventName Elapsed -Action {
-            $notifyIcon.Dispose()
-            $timer.Dispose()
-        } | Out-Null
-        $timer.Start()
+        if ($null -eq $script:NotifyIcon) {
+            $script:NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
+            $script:NotifyIcon.Icon = [System.Drawing.SystemIcons]::Information
+            $script:NotifyIcon.Visible = $true
+        }
+        $script:NotifyIcon.BalloonTipTitle = $Title
+        $script:NotifyIcon.BalloonTipText = $Message
+        $script:NotifyIcon.ShowBalloonTip(3000)
     } catch {
         # Notification is non-critical
     }
 }
 
-# --- Find Google Drive mount point ---
+# Cleanup NotifyIcon on exit
+Register-EngineEvent PowerShell.Exiting -Action {
+    if ($null -ne $script:NotifyIcon) {
+        $script:NotifyIcon.Dispose()
+        $script:NotifyIcon = $null
+    }
+} | Out-Null
+
+# --- Find Google Drive mount point (cached) ---
+
+$script:CachedGDriveMount = $null
 
 function Find-GDriveMount {
     # Strategy 1: Check registry for DriveFS mount point
@@ -129,9 +134,10 @@ function Resolve-GDriveUrl {
     }
 
     # Normalize: Mac uses "Общие диски", Windows may use "Shared drives" or localized name
-    # We try both variants
+    # We try both variants (cached mount point)
 
-    $gdriveMount = Find-GDriveMount
+    if ($null -eq $script:CachedGDriveMount) { $script:CachedGDriveMount = Find-GDriveMount }
+    $gdriveMount = $script:CachedGDriveMount
     if (-not $gdriveMount) {
         return $null
     }
@@ -145,37 +151,17 @@ function Resolve-GDriveUrl {
         return $candidate
     }
 
-    # Try swapping "Общие диски" <-> "Shared drives"
-    $swapped = $relativePath -replace '^Общие диски', 'Shared drives'
-    if ($swapped -ne $relativePath) {
-        $candidate = Join-Path $gdriveMount $swapped
-        if (Test-Path $candidate) {
-            return $candidate
-        }
+    # Try locale swaps via hashtable
+    $swaps = [ordered]@{
+        "Общие диски" = "Shared drives"; "Shared drives" = "Общие диски"
+        "Мой диск" = "My Drive"; "My Drive" = "Мой диск"
     }
-
-    $swapped = $relativePath -replace '^Shared drives', 'Общие диски'
-    if ($swapped -ne $relativePath) {
-        $candidate = Join-Path $gdriveMount $swapped
-        if (Test-Path $candidate) {
-            return $candidate
-        }
-    }
-
-    # Try swapping "My Drive" <-> "Мой диск"
-    $swapped = $relativePath -replace '^Мой диск', 'My Drive'
-    if ($swapped -ne $relativePath) {
-        $candidate = Join-Path $gdriveMount $swapped
-        if (Test-Path $candidate) {
-            return $candidate
-        }
-    }
-
-    $swapped = $relativePath -replace '^My Drive', 'Мой диск'
-    if ($swapped -ne $relativePath) {
-        $candidate = Join-Path $gdriveMount $swapped
-        if (Test-Path $candidate) {
-            return $candidate
+    foreach ($from in $swaps.Keys) {
+        $to = $swaps[$from]
+        $swapped = $relativePath -replace "^$([regex]::Escape($from))", $to
+        if ($swapped -ne $relativePath) {
+            $candidate = Join-Path $gdriveMount $swapped
+            if (Test-Path $candidate) { return $candidate }
         }
     }
 
@@ -208,7 +194,7 @@ function Extract-GDriveUrl {
         if ($Text -match 'gdrive://') {
             $isWrapped = $true
             # Extract URL from wrapped format (between ``` blocks or standalone line)
-            if ($Text -match 'gdrive://[^\s`]+') {
+            if ($Text -match '(?m)gdrive://[^\r\n`]+') {
                 $rawUrl = $Matches[0]
             }
         }
@@ -265,6 +251,17 @@ while ($true) {
 
                 # Resolve to local path
                 $localPath = Resolve-GDriveUrl -Url $rawUrl
+
+                # Path traversal guard: ensure path stays within Google Drive mount
+                if ($localPath) {
+                    $resolvedFull = [System.IO.Path]::GetFullPath($localPath)
+                    $mountRoot = $script:CachedGDriveMount
+                    if ($mountRoot -and -not $resolvedFull.StartsWith($mountRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        Write-Log "SECURITY: Path traversal blocked: $rawUrl -> $resolvedFull"
+                        Show-Notification -Title "GDrive Error" -Message "Security: path outside Google Drive"
+                        $LAST_CLIP = $clipText; continue
+                    }
+                }
 
                 if ($localPath -and (Test-Path $localPath)) {
                     $isFolder = (Test-Path $localPath -PathType Container)

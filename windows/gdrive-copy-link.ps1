@@ -69,31 +69,6 @@ function Find-GDriveInfo {
         }
     }
 
-    # Try to get email from Google Drive config
-    $drivefsConfigDir = "$env:LOCALAPPDATA\Google\DriveFS"
-    if (Test-Path $drivefsConfigDir) {
-        # Look for account directories (they are named by hash, but contain account info)
-        $accountFiles = Get-ChildItem -Path $drivefsConfigDir -Filter "account_db*" -Recurse -ErrorAction SilentlyContinue
-        if (-not $accountFiles) {
-            # Try reading from profiles
-            $profileDirs = Get-ChildItem -Path $drivefsConfigDir -Directory -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -match '^\d+$' }
-            foreach ($pd in $profileDirs) {
-                $accountFile = Join-Path $pd.FullName "account_db"
-                if (Test-Path $accountFile) {
-                    # Simple heuristic: read file and look for email pattern
-                    try {
-                        $content = [System.IO.File]::ReadAllText($accountFile)
-                        if ($content -match '[\w.-]+@[\w.-]+\.\w+') {
-                            $email = $Matches[0]
-                            break
-                        }
-                    } catch {}
-                }
-            }
-        }
-    }
-
     # Fallback: try to get email from environment or whoami
     if (-not $email) {
         # Check if path contains email hint
@@ -114,8 +89,6 @@ function Find-GDriveInfo {
 $info = Find-GDriveInfo -Path $FilePath
 
 if (-not $info.IsGDrive) {
-    # Not a Google Drive file — show notification and exit
-    $balloon = New-Object System.Windows.Forms.NotifyIcon
     Write-Host "ERROR: Not a Google Drive path: $FilePath"
     exit 1
 }
@@ -137,16 +110,36 @@ if ($info.Email) {
 
 # Detect shared vs personal drive
 $gdriveUrlPath = ""
+# Helper: selective URL encoding (encode special chars, keep Cyrillic readable)
+function Invoke-SelectiveUrlEncode {
+    param([string]$Text)
+    return [string](& python3 -c @"
+import sys, urllib.parse
+text = sys.argv[1]
+result = []
+for ch in text:
+    if ch == '/':
+        result.append(ch)
+    elif ord(ch) > 127:
+        result.append(ch)
+    elif ch.isalnum() or ch in '-_.~':
+        result.append(ch)
+    else:
+        result.append(urllib.parse.quote(ch))
+print(''.join(result), end='')
+"@ $Text)
+}
+
 if ($relativePath -match '^Shared drives\\(.*)') {
     # Shared drive — map to Mac's "Общие диски" equivalent
-    $innerPath = $Matches[1] -replace '\\', '/'
+    $innerPath = Invoke-SelectiveUrlEncode ($Matches[1] -replace '\\', '/')
     if ($emailEncoded) {
         $gdriveUrlPath = "gdrive://CloudStorage/GoogleDrive-$emailEncoded/Shared drives/$innerPath"
     } else {
         $gdriveUrlPath = "gdrive://Shared drives/$innerPath"
     }
 } elseif ($relativePath -match '^My Drive\\(.*)') {
-    $innerPath = $Matches[1] -replace '\\', '/'
+    $innerPath = Invoke-SelectiveUrlEncode ($Matches[1] -replace '\\', '/')
     if ($emailEncoded) {
         $gdriveUrlPath = "gdrive://CloudStorage/GoogleDrive-$emailEncoded/My Drive/$innerPath"
     } else {
@@ -154,7 +147,7 @@ if ($relativePath -match '^Shared drives\\(.*)') {
     }
 } else {
     # Generic fallback
-    $innerPath = $relativePath -replace '\\', '/'
+    $innerPath = Invoke-SelectiveUrlEncode ($relativePath -replace '\\', '/')
     if ($emailEncoded) {
         $gdriveUrlPath = "gdrive://CloudStorage/GoogleDrive-$emailEncoded/$innerPath"
     } else {
@@ -182,19 +175,6 @@ try {
         $FileId = Get-Content -LiteralPath $adsPath -ErrorAction SilentlyContinue
     }
 } catch {}
-
-# Alternative: try reading from .drive metadata
-if (-not $FileId) {
-    try {
-        # Check for desktop.ini with Google Drive metadata
-        $parentDir = [System.IO.Path]::GetDirectoryName($FilePath)
-        $desktopIni = Join-Path $parentDir "desktop.ini"
-        if (Test-Path $desktopIni) {
-            $iniContent = Get-Content $desktopIni -ErrorAction SilentlyContinue
-            # Look for Google Drive identifiers — this is speculative
-        }
-    } catch {}
-}
 
 # --- Build clipboard content ---
 $lines = @()

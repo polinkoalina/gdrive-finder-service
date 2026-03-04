@@ -61,18 +61,40 @@ while true; do
     fi
 
     if [[ -n "$RAW_URL" ]] && [[ "$CLIP" != "$LAST_CLIP" ]]; then
-        # Decode filename for logging (human-readable)
-        FILENAME=$(basename "$RAW_URL" | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))" 2>/dev/null || basename "$RAW_URL")
-        log "Opening: $FILENAME (wrapped=$IS_WRAPPED)"
-
-        # Build local path from gdrive:// URL (handles both encoded and readable formats)
-        LOCAL_PATH=$(printf '%s' "$RAW_URL" | python3 -c "
+        # Decode filename + build local path in one python3 call (tab-separated for bash 3.2)
+        IFS=$'\t' read -r FILENAME LOCAL_PATH < <(printf '%s' "$RAW_URL" | python3 -c "
 import sys, urllib.parse, os
 url = sys.stdin.read()
 decoded = urllib.parse.unquote(url)
+filename = os.path.basename(decoded)
 home = os.path.expanduser('~')
-print(decoded.replace('gdrive://', f'{home}/Library/'))
-")
+local_path = decoded.replace('gdrive://', f'{home}/Library/')
+print(filename + '\t' + local_path, end='')
+" 2>/dev/null)
+        # Fallback if python3 fails
+        if [[ -z "$FILENAME" ]]; then FILENAME=$(basename "$RAW_URL"); fi
+        if [[ -z "$LOCAL_PATH" ]]; then LOCAL_PATH=$(echo "$RAW_URL" | sed "s|gdrive://|$HOME/Library/|"); fi
+
+        log "Opening: $FILENAME (wrapped=$IS_WRAPPED)"
+
+        # Locale swap: try alternative folder names if path not found
+        if [[ ! -e "$LOCAL_PATH" ]]; then
+            for FROM_TO in "Shared drives:Общие диски" "Общие диски:Shared drives" "My Drive:Мой диск" "Мой диск:My Drive"; do
+                FROM="${FROM_TO%%:*}"; TO="${FROM_TO#*:}"
+                SWAPPED="${LOCAL_PATH/$FROM/$TO}"
+                if [[ "$SWAPPED" != "$LOCAL_PATH" ]] && [[ -e "$SWAPPED" ]]; then
+                    LOCAL_PATH="$SWAPPED"; break
+                fi
+            done
+        fi
+
+        # Path traversal guard: ensure path stays within Google Drive
+        REAL_PATH=$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$LOCAL_PATH" 2>/dev/null || echo "$LOCAL_PATH")
+        if [[ "$REAL_PATH" != *"/Library/CloudStorage/GoogleDrive-"* ]]; then
+            log "SECURITY: Path traversal blocked: $LOCAL_PATH -> $REAL_PATH"
+            notify "Security: path outside Google Drive" "GDrive Error"
+            LAST_CLIP="$CLIP"; continue
+        fi
 
         # If already wrapped, treat as incoming (just open, don't re-wrap)
         if [[ "$IS_WRAPPED" == true ]]; then
