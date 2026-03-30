@@ -47,7 +47,8 @@ function Find-GDriveInfo {
 
     # Try to find via known drive letters (scan A-Z for Google Drive markers)
     if (-not $isGDrive) {
-        if ((Test-Path "$driveLetter`Shared drives") -or (Test-Path "$driveLetter`My Drive")) {
+        if ((Test-Path "$driveLetter`Shared drives") -or (Test-Path "$driveLetter`My Drive") -or
+            (Test-Path "$driveLetter`Общие диски") -or (Test-Path "$driveLetter`Мой диск")) {
             $isGDrive = $true
             $gdriveRoot = $driveLetter
         }
@@ -130,20 +131,22 @@ print(''.join(result), end='')
 "@ $Text)
 }
 
-if ($relativePath -match '^Shared drives\\(.*)') {
-    # Shared drive — map to Mac's "Общие диски" equivalent
-    $innerPath = Invoke-SelectiveUrlEncode ($Matches[1] -replace '\\', '/')
+# Folder names depend on OS locale (RU: "Общие диски", EN: "Shared drives")
+if ($relativePath -match '^(Shared drives|Общие диски)\\(.*)') {
+    $folderName = $Matches[1]
+    $innerPath = Invoke-SelectiveUrlEncode ($Matches[2] -replace '\\', '/')
     if ($emailEncoded) {
-        $gdriveUrlPath = "gdrive://CloudStorage/GoogleDrive-$emailEncoded/Shared drives/$innerPath"
+        $gdriveUrlPath = "gdrive://CloudStorage/GoogleDrive-$emailEncoded/$folderName/$innerPath"
     } else {
-        $gdriveUrlPath = "gdrive://Shared drives/$innerPath"
+        $gdriveUrlPath = "gdrive://$folderName/$innerPath"
     }
-} elseif ($relativePath -match '^My Drive\\(.*)') {
-    $innerPath = Invoke-SelectiveUrlEncode ($Matches[1] -replace '\\', '/')
+} elseif ($relativePath -match '^(My Drive|Мой диск)\\(.*)') {
+    $folderName = $Matches[1]
+    $innerPath = Invoke-SelectiveUrlEncode ($Matches[2] -replace '\\', '/')
     if ($emailEncoded) {
-        $gdriveUrlPath = "gdrive://CloudStorage/GoogleDrive-$emailEncoded/My Drive/$innerPath"
+        $gdriveUrlPath = "gdrive://CloudStorage/GoogleDrive-$emailEncoded/$folderName/$innerPath"
     } else {
-        $gdriveUrlPath = "gdrive://My Drive/$innerPath"
+        $gdriveUrlPath = "gdrive://$folderName/$innerPath"
     }
 } else {
     # Generic fallback
@@ -156,10 +159,11 @@ if ($relativePath -match '^Shared drives\\(.*)') {
 }
 
 # --- Extract display path ---
-if ($relativePath -match '^Shared drives\\(.*)') {
-    $DisplayPath = "/" + ($Matches[1] -replace '\\', '/')
-} elseif ($relativePath -match '^My Drive\\(.*)') {
-    $DisplayPath = "/" + ($Matches[1] -replace '\\', '/')
+# Folder names depend on OS locale (RU: "Общие диски"/"Мой диск", EN: "Shared drives"/"My Drive")
+if ($relativePath -match '^(Shared drives|Общие диски)\\(.*)') {
+    $DisplayPath = "/" + ($Matches[2] -replace '\\', '/')
+} elseif ($relativePath -match '^(My Drive|Мой диск)\\(.*)') {
+    $DisplayPath = "/" + ($Matches[2] -replace '\\', '/')
 } else {
     $DisplayPath = "/" + $Filename
 }
