@@ -140,7 +140,7 @@ curl -fsSL https://raw.githubusercontent.com/msff/gdrive-finder-service/main/rem
 
 - Telegram/Slack don't recognize `gdrive://` as clickable links (that's why we added the clipboard daemon!)
 - Google Drive mount paths vary between systems — the URL handler accounts for common variations
-- Non-English "Shared Drives" folder names may cause issues
+- ~~Non-English "Shared Drives" folder names may cause issues~~ Fixed: supports both English ("Shared drives", "My Drive") and Russian ("Общие диски", "Мой диск") macOS locale variants
 
 ---
 
