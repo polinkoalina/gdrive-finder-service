@@ -52,6 +52,20 @@ if [[ -n "$LATEST_URL" ]]; then
         /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/gdrive-finder-service.app" 2>/dev/null || true
     fi
 
+    # Drop the upstream "Copy GDrive link" service. This fork ships the
+    # "Copy GDrive Link with URL" Quick Action, which produces the wrapped
+    # format (filename + Google URL + display path + gdrive://). Two nearly
+    # identical menu items make people pick the wrong one and share a bare
+    # gdrive:// link with no path. The URL scheme handler stays untouched.
+    APP_PLIST="/Applications/gdrive-finder-service.app/Contents/Info.plist"
+    if /usr/libexec/PlistBuddy -c "Print :NSServices" "$APP_PLIST" &>/dev/null; then
+        echo "   Removing duplicate Finder service..."
+        sudo /usr/libexec/PlistBuddy -c "Delete :NSServices" "$APP_PLIST" && \
+        sudo codesign --force --sign - "/Applications/gdrive-finder-service.app" 2>/dev/null && \
+        /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/gdrive-finder-service.app" 2>/dev/null || true
+        /System/Library/CoreServices/pbs -flush 2>/dev/null || true
+    fi
+
     echo "   ✅ URL Handler installed"
 else
     echo "   ⚠️  Could not find latest release. Skipping URL handler."
